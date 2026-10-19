@@ -21,7 +21,15 @@ class Config:
 
     @property
     def GEMINI_API_KEY(self) -> str | None:
-        return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not key:
+            try:
+                import streamlit as st
+                if hasattr(st, "secrets"):
+                    key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+            except Exception:
+                pass
+        return key
 
     @property
     def EMBEDDING_PROVIDER(self) -> str:
