@@ -80,25 +80,30 @@ if "custom_api_key" not in st.session_state:
 has_env_key = bool(config.GEMINI_API_KEY)
 
 
+@st.cache_resource(show_spinner=False)
+def _get_shared_pipeline(embedding_mode: str, collection_name: str, model_name: str) -> RAGPipeline:
+    """Shared pipeline resource cached server-wide across all user sessions and reruns."""
+    return RAGPipeline(
+        embedding_provider=embedding_mode,
+        collection=collection_name,
+        generation_model=model_name,
+    )
+
+
 def get_or_create_pipeline(api_key: str, embedding_mode: str, collection_name: str, model_name: str) -> RAGPipeline:
     """Singleton pipeline provider to prevent multiple Qdrant client lock contentions."""
-    if st.session_state.pipeline is None:
-        st.session_state.pipeline = RAGPipeline(
-            api_key=api_key or config.GEMINI_API_KEY,
-            embedding_provider=embedding_mode,
-            collection=collection_name,
-            generation_model=model_name,
-        )
-    else:
-        pipe = st.session_state.pipeline
-        resolved_key = api_key or config.GEMINI_API_KEY
-        if resolved_key:
-            pipe.api_key = resolved_key
+    pipe = _get_shared_pipeline(embedding_mode, collection_name, model_name)
+    resolved_key = api_key or config.GEMINI_API_KEY
+    if resolved_key:
+        pipe.api_key = resolved_key
+        if hasattr(pipe, "generator") and pipe.generator:
             pipe.generator.api_key = resolved_key
-        pipe.collection = collection_name
-        pipe.generation_model = model_name
+    pipe.collection = collection_name
+    pipe.generation_model = model_name
+    if hasattr(pipe, "generator") and pipe.generator:
         pipe.generator.model = model_name
-    return st.session_state.pipeline
+    st.session_state.pipeline = pipe
+    return pipe
 
 
 # Sidebar Configuration

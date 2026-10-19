@@ -18,6 +18,8 @@ def tokenize_for_bm25(text: str) -> List[str]:
     return re.findall(r"\b\w+\b", text.lower())
 
 
+import os
+import tempfile
 import threading
 
 _QDRANT_CLIENTS: Dict[str, QdrantClient] = {}
@@ -27,13 +29,32 @@ def get_qdrant_client(
     path: Optional[str | Path] = None,
     host: Optional[str] = None,
     port: Optional[int] = None,
+    url: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> QdrantClient:
     """
-    Get a singleton Qdrant client. Defaults to embedded on-disk storage in data/qdrant_db.
-    Reuses existing client instances to avoid portalocker file lock conflicts.
+    Get a singleton Qdrant client with automatic fallback.
+    - Reuses existing active client instances across threads/sessions.
+    - If local directory lock fails (e.g. NFS / cloud mount Errno 11 AlreadyLocked),
+      automatically falls back to /tmp/rag_qdrant_db.
+    - If temporary disk also fails, falls back gracefully to in-memory Qdrant (:memory:).
     """
     global _QDRANT_CLIENTS
     with _CLIENT_LOCK:
+        # 1. Remote Qdrant (Host/Port or URL / Qdrant Cloud)
+        qdrant_url = url or os.getenv("QDRANT_URL")
+        qdrant_api_key = api_key or os.getenv("QDRANT_API_KEY")
+        if qdrant_url:
+            key = f"url:{qdrant_url}"
+            if key in _QDRANT_CLIENTS:
+                return _QDRANT_CLIENTS[key]
+            try:
+                client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+                _QDRANT_CLIENTS[key] = client
+                return client
+            except Exception as e:
+                logger.warning(f"Could not connect to Qdrant at {qdrant_url} ({e}). Falling back to local storage.")
+
         if host and port:
             key = f"remote:{host}:{port}"
             if key in _QDRANT_CLIENTS:
@@ -43,28 +64,71 @@ def get_qdrant_client(
                 _QDRANT_CLIENTS[key] = client
                 return client
             except Exception as e:
-                logger.warning(f"Could not connect to Qdrant at {host}:{port} ({e}). Falling back to local disk.")
+                logger.warning(f"Could not connect to Qdrant at {host}:{port} ({e}). Falling back to local storage.")
 
-        target_path = str(Path(path or config.QDRANT_DIR).resolve())
-        if target_path in _QDRANT_CLIENTS:
-            client = _QDRANT_CLIENTS[target_path]
+        # 2. Check if an active client already exists for this path
+        target_path_str = str(Path(path or config.QDRANT_DIR).resolve())
+        if target_path_str in _QDRANT_CLIENTS:
+            client = _QDRANT_CLIENTS[target_path_str]
             try:
                 client.get_collections()
                 return client
             except Exception:
-                pass  # Reconnect if previous instance was closed
+                pass  # Client closed/invalid, recreate
 
-        target_dir = Path(target_path)
-        target_dir.mkdir(parents=True, exist_ok=True)
+        # If path was not specified, reuse any default healthy client
+        if path is None and "default" in _QDRANT_CLIENTS:
+            client = _QDRANT_CLIENTS["default"]
+            try:
+                client.get_collections()
+                return client
+            except Exception:
+                pass
+
+        # 3. Try primary target path on disk
+        target_dir = Path(target_path_str)
         try:
-            client = QdrantClient(path=target_path)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            client = QdrantClient(path=target_path_str)
+            _QDRANT_CLIENTS[target_path_str] = client
+            _QDRANT_CLIENTS["default"] = client
+            return client
         except Exception as e:
-            if "already accessed by another instance" in str(e):
-                if target_path in _QDRANT_CLIENTS:
-                    return _QDRANT_CLIENTS[target_path]
-            raise
-        _QDRANT_CLIENTS[target_path] = client
-        return client
+            logger.warning(f"Primary Qdrant initialization at '{target_path_str}' failed: {e}")
+
+            # Check if any previously registered client is still functional
+            for cached_client in list(_QDRANT_CLIENTS.values()):
+                try:
+                    cached_client.get_collections()
+                    _QDRANT_CLIENTS[target_path_str] = cached_client
+                    return cached_client
+                except Exception:
+                    continue
+
+            # Fallback 1: Local /tmp directory (solves NFS / mount portalocker Errno 11)
+            temp_path = str((Path(tempfile.gettempdir()) / "rag_qdrant_db").resolve())
+            if temp_path != target_path_str:
+                try:
+                    Path(temp_path).mkdir(parents=True, exist_ok=True)
+                    logger.warning(f"Attempting fallback to temporary local storage: '{temp_path}'...")
+                    client = QdrantClient(path=temp_path)
+                    _QDRANT_CLIENTS[target_path_str] = client
+                    _QDRANT_CLIENTS[temp_path] = client
+                    _QDRANT_CLIENTS["default"] = client
+                    return client
+                except Exception as temp_err:
+                    logger.warning(f"Temporary disk fallback also failed: {temp_err}")
+
+            # Fallback 2: In-Memory Qdrant (100% crash-proof, no file locks)
+            logger.warning("Falling back to in-memory Qdrant client (location=':memory:')...")
+            try:
+                client = QdrantClient(location=":memory:")
+                _QDRANT_CLIENTS[target_path_str] = client
+                _QDRANT_CLIENTS["default"] = client
+                return client
+            except Exception as mem_err:
+                logger.error(f"Failed to create in-memory Qdrant client: {mem_err}")
+                raise
 
 
 def build_index(

@@ -128,5 +128,33 @@ def test_context_formatting():
     assert "Content of Doc A" in formatted
     assert "Doc B" in formatted
 
+
+def test_qdrant_fallback_on_lock(monkeypatch, tmp_path):
+    """Verify that when local disk raises AlreadyLocked / RuntimeError, get_qdrant_client falls back safely."""
+    import src.index as idx
+    from qdrant_client import QdrantClient as RealQdrantClient
+
+    # Call get_qdrant_client with a unique path
+    client1 = idx.get_qdrant_client(path=tmp_path / "lock_test_1")
+    assert client1 is not None
+
+    # Re-requesting same path should reuse cached client without re-locking
+    client2 = idx.get_qdrant_client(path=tmp_path / "lock_test_1")
+    assert client2 is client1
+
+    # Clear cache and simulate disk lock error
+    idx._QDRANT_CLIENTS.clear()
+
+    def mock_disk_lock_only(path=None, location=None, **kwargs):
+        if path is not None and "disk_locked" in str(path):
+            raise RuntimeError("Storage folder /mount/src/rag/data/qdrant_db is already accessed by another instance of Qdrant client.")
+        return RealQdrantClient(location=location or ":memory:", **kwargs)
+
+    monkeypatch.setattr(idx, "QdrantClient", mock_disk_lock_only)
+    fallback_client = idx.get_qdrant_client(path=tmp_path / "disk_locked")
+    assert fallback_client is not None
+    assert fallback_client.collection_exists("non_existent") is False
+
+
 if __name__ == "__main__":
     pytest.main(["-v", "test_rag.py"])
