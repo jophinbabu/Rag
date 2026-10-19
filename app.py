@@ -74,8 +74,10 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pipeline" not in st.session_state:
     st.session_state.pipeline = None
-if "api_key" not in st.session_state:
-    st.session_state.api_key = config.GEMINI_API_KEY or ""
+if "custom_api_key" not in st.session_state:
+    st.session_state.custom_api_key = ""
+
+has_env_key = bool(config.GEMINI_API_KEY)
 
 
 def get_or_create_pipeline(api_key: str, embedding_mode: str, collection_name: str, model_name: str) -> RAGPipeline:
@@ -89,9 +91,10 @@ def get_or_create_pipeline(api_key: str, embedding_mode: str, collection_name: s
         )
     else:
         pipe = st.session_state.pipeline
-        if api_key:
-            pipe.api_key = api_key
-            pipe.generator.api_key = api_key
+        resolved_key = api_key or config.GEMINI_API_KEY
+        if resolved_key:
+            pipe.api_key = resolved_key
+            pipe.generator.api_key = resolved_key
         pipe.collection = collection_name
         pipe.generation_model = model_name
         pipe.generator.model = model_name
@@ -102,17 +105,52 @@ def get_or_create_pipeline(api_key: str, embedding_mode: str, collection_name: s
 with st.sidebar:
     st.title("⚡ Gemini RAG Config")
     
-    # API Key Input
-    api_key_input = st.text_input(
-        "Google Gemini API Key",
-        value=st.session_state.api_key,
-        type="password",
-        help="Reads from .env or enter here.",
-    )
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
-        st.session_state.pipeline = None
-        st.success("API key updated!")
+    # Secure API Key Status & Input
+    if has_env_key:
+        st.markdown(
+            """
+            <div style="background:#16231d; border:1px solid #059669; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+                <span style="color:#34d399; font-weight:600; font-size:0.88rem;">🔒 Gemini API Key: Active</span>
+                <div style="color:#94a3b8; font-size:0.75rem; margin-top:2px;">Loaded securely from backend environment</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.expander("Override API Key (Optional)"):
+            custom_key_input = st.text_input(
+                "Custom Gemini Key",
+                value=st.session_state.custom_api_key,
+                type="password",
+                placeholder="Leave blank to use default",
+                help="Only enter if you wish to override the backend key.",
+            )
+            if custom_key_input != st.session_state.custom_api_key:
+                st.session_state.custom_api_key = custom_key_input
+                st.session_state.pipeline = None
+                st.rerun()
+    else:
+        st.markdown(
+            """
+            <div style="background:#271d15; border:1px solid #d97706; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+                <span style="color:#fbbf24; font-weight:600; font-size:0.88rem;">⚠️ API Key Required</span>
+                <div style="color:#94a3b8; font-size:0.75rem; margin-top:2px;">Enter your key below to enable AI answers</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        custom_key_input = st.text_input(
+            "Google Gemini API Key",
+            value=st.session_state.custom_api_key,
+            type="password",
+            placeholder="AIzaSy...",
+            help="Get a free key from https://aistudio.google.com/",
+        )
+        if custom_key_input != st.session_state.custom_api_key:
+            st.session_state.custom_api_key = custom_key_input
+            st.session_state.pipeline = None
+            st.rerun()
+
+    active_api_key = st.session_state.custom_api_key or config.GEMINI_API_KEY or ""
 
     # Model & Retrieval Settings
     st.subheader("Model Settings")
@@ -142,7 +180,7 @@ with st.sidebar:
             with st.spinner("Fetching papers, parsing PDFs, and building indexes..."):
                 try:
                     pipeline = get_or_create_pipeline(
-                        st.session_state.api_key, embedding_mode, collection_name, selected_gen_model
+                        active_api_key, embedding_mode, collection_name, selected_gen_model
                     )
                     chunks = pipeline.ingest_arxiv(query=arxiv_query, max_results=arxiv_count, build_now=True)
                     st.success(f"Indexed {len(chunks)} chunks from {arxiv_count} arXiv papers!")
@@ -160,7 +198,7 @@ with st.sidebar:
             with st.spinner("Processing uploaded files..."):
                 try:
                     pipeline = get_or_create_pipeline(
-                        st.session_state.api_key, embedding_mode, collection_name, selected_gen_model
+                        active_api_key, embedding_mode, collection_name, selected_gen_model
                     )
                     all_chunks = []
                     for uf in uploaded_files:
@@ -181,7 +219,7 @@ with st.sidebar:
         with st.spinner("Loading demo knowledge base..."):
             try:
                 pipeline = get_or_create_pipeline(
-                    st.session_state.api_key, embedding_mode, collection_name, selected_gen_model
+                    active_api_key, embedding_mode, collection_name, selected_gen_model
                 )
                 demo_doc = config.DATA_DIR / "sample_rag_guide.txt"
                 if not demo_doc.exists():
@@ -211,7 +249,7 @@ Google Gemini provides high-speed, cost-effective reasoning with expansive conte
 
 # Main Application Window
 pipeline = get_or_create_pipeline(
-    st.session_state.api_key, embedding_mode, collection_name, selected_gen_model
+    active_api_key, embedding_mode, collection_name, selected_gen_model
 )
 stats = pipeline.get_stats()
 indexed_count = stats.get("points_count", 0)
@@ -341,7 +379,7 @@ if query_to_run:
                 "chunks": []
             })
         else:
-            if not st.session_state.api_key:
+            if not active_api_key:
                 st.warning("⚠️ No Gemini API key provided. Showing retrieved context passages only. Add your API key in the sidebar to generate AI answers.")
                 with st.expander("Retrieved Context Chunks", expanded=True):
                     for idx, c in enumerate(retrieved_chunks, 1):
