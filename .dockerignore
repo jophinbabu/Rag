@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+ENV
+env
+data/qdrant_db/
+data/pdfs/
+data/*.pkl

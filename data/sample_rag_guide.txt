@@ -1,0 +1,13 @@
+# Modern Retrieval-Augmented Generation (RAG) Architecture
+
+1 Introduction
+Retrieval-Augmented Generation (RAG) combines pre-trained parametric language models with non-parametric external memory. Instead of relying solely on parameters learned during pre-training, RAG dynamically retrieves relevant context passages from an external corpus to inform the language model's generation.
+
+2 Hybrid Search with Reciprocal Rank Fusion
+State-of-the-art RAG implementations combine dense semantic embeddings with sparse lexical search (such as BM25). Dense search captures semantic meaning, synonyms, and conceptual intent using vector embeddings. Sparse search excels at exact keyword matching, code symbols, specific IDs, and rare entities.
+Reciprocal Rank Fusion (RRF) combines rankings from dense and sparse retrievers using the formula:
+RRF_score(d) = sum(1 / (k + rank + 1))
+where k is a smoothing constant typically set to 60.
+
+3 Gemini Generation Engine
+Google Gemini provides high-speed, cost-effective reasoning with expansive context windows. Grounded prompt engineering instructs Gemini to strictly cite sources and decline speculation when external evidence is insufficient, preventing hallucinations in production environments.

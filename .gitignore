@@ -1,0 +1,19 @@
+# Environment variables & secrets
+.env
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Data and vector database storage
+data/qdrant_db/
+data/pdfs/*.pdf
+data/*.pkl
+
+# Virtual environment
+.venv/
+venv/
+env/
